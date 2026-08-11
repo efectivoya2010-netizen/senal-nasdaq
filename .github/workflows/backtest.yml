@@ -1,0 +1,21 @@
+name: Backtest de la estrategia
+
+on:
+  workflow_dispatch:   # solo corre cuando vos apretas "Run workflow" a mano
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Bajar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Correr el backtest
+        env:
+          TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
+        run: python backtest.py
