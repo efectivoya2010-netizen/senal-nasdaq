@@ -133,18 +133,21 @@ def evaluate_at(bars, i):
     return {"side": side, "conf": conf, "entry": price, "sl": sl, "tp": tp, "idx": i}
 
 def simulate_outcome(bars, signal):
-    side, sl, tp = signal["side"], signal["sl"], signal["tp"]
+    """Devuelve (resultado, % de distancia entre entrada y el nivel que toco)."""
+    side, sl, tp, entry = signal["side"], signal["sl"], signal["tp"], signal["entry"]
     start = signal["idx"] + 1
     end = min(len(bars), start + HORIZON)
+    win_pct = abs(tp - entry) / entry * 100
+    loss_pct = abs(entry - sl) / entry * 100
     for k in range(start, end):
         b = bars[k]
         if side == "buy":
-            if b["l"] <= sl: return "loss"
-            if b["h"] >= tp: return "win"
+            if b["l"] <= sl: return "loss", loss_pct
+            if b["h"] >= tp: return "win", win_pct
         else:
-            if b["h"] >= sl: return "loss"
-            if b["l"] <= tp: return "win"
-    return "sin_definir"  # no toco ninguno de los dos dentro del horizonte
+            if b["h"] >= sl: return "loss", loss_pct
+            if b["l"] <= tp: return "win", win_pct
+    return "sin_definir", 0  # no toco ninguno de los dos dentro del horizonte
 
 def main():
     report_lines = ["# Backtest — resultados por nivel de confluencia\n"]
@@ -156,26 +159,38 @@ def main():
             report_lines.append(f"Error trayendo datos: {e}\n")
             continue
 
-        stats = {1: {"win":0,"loss":0}, 2: {"win":0,"loss":0}, 3: {"win":0,"loss":0}, 4: {"win":0,"loss":0}}
+        stats = {c: {"win":0, "loss":0, "sum_win_pct":0.0, "sum_loss_pct":0.0} for c in [1,2,3,4]}
         total_signals = 0
         i = LOOKBACK
         while i < len(bars) - 1:
             sig = evaluate_at(bars, i)
             if sig:
                 total_signals += 1
-                outcome = simulate_outcome(bars, sig)
+                outcome, pct = simulate_outcome(bars, sig)
                 if outcome in ("win","loss"):
                     stats[sig["conf"]][outcome] += 1
+                    if outcome == "win": stats[sig["conf"]]["sum_win_pct"] += pct
+                    else: stats[sig["conf"]]["sum_loss_pct"] += pct
             i += 1
 
         report_lines.append(f"Velas analizadas: {len(bars)} | Señales encontradas: {total_signals}\n")
-        report_lines.append("| Confluencia | Ganadas | Perdidas | % Acierto |")
-        report_lines.append("|---|---|---|---|")
+        report_lines.append("| Confluencia | Ganadas | Perdidas | % Acierto | Ganancia media | Pérdida media | Expectativa* | Factor de ganancia** |")
+        report_lines.append("|---|---|---|---|---|---|---|---|")
         for conf in [1,2,3,4]:
-            w, l = stats[conf]["win"], stats[conf]["loss"]
+            s = stats[conf]
+            w, l = s["win"], s["loss"]
             total = w + l
             pct = (w/total*100) if total > 0 else 0
-            report_lines.append(f"| {conf}/4 | {w} | {l} | {pct:.1f}% ({total} casos) |")
+            avg_win = (s["sum_win_pct"]/w) if w > 0 else 0
+            avg_loss = (s["sum_loss_pct"]/l) if l > 0 else 0
+            win_rate = w/total if total > 0 else 0
+            loss_rate = l/total if total > 0 else 0
+            expectancy = (win_rate*avg_win) - (loss_rate*avg_loss)
+            profit_factor = (s["sum_win_pct"]/s["sum_loss_pct"]) if s["sum_loss_pct"] > 0 else (float('inf') if s["sum_win_pct"]>0 else 0)
+            pf_str = "∞" if profit_factor == float('inf') else f"{profit_factor:.2f}"
+            report_lines.append(f"| {conf}/4 | {w} | {l} | {pct:.1f}% ({total} casos) | +{avg_win:.2f}% | -{avg_loss:.2f}% | {expectancy:+.3f}% | {pf_str} |")
+        report_lines.append("\n*Expectativa: cuánto se espera ganar o perder en promedio por operación, combinando el % de acierto con el tamaño de cada ganancia/pérdida. Positivo = rentable en promedio, negativo = pierde plata en promedio aunque acierte muchas veces.")
+        report_lines.append("\n**Factor de ganancia: total ganado / total perdido. Por encima de 1 = rentable, por debajo de 1 = no, sin importar el % de acierto.\n")
 
     report = "\n".join(report_lines)
     print(report)
