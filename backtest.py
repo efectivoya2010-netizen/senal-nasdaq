@@ -129,15 +129,17 @@ def evaluate_at(bars, i, min_tp_pct):
     if side == "buy":
         sl = flush_low - buf
         tp = poc if poc > price else vah
-        min_tp = price * (1 + min_tp_pct)
-        if tp < min_tp:
-            tp = min_tp
+        if min_tp_pct > 0:
+            min_tp = price * (1 + min_tp_pct)
+            if tp < min_tp:
+                tp = min_tp
     else:
         sl = flush_high + buf
         tp = poc if poc < price else val
-        min_tp = price * (1 - min_tp_pct)
-        if tp > min_tp:
-            tp = min_tp
+        if min_tp_pct > 0:
+            min_tp = price * (1 - min_tp_pct)
+            if tp > min_tp:
+                tp = min_tp
     return {"side": side, "conf": conf, "entry": price, "sl": sl, "tp": tp, "idx": i}
 
 def simulate_outcome(bars, signal):
