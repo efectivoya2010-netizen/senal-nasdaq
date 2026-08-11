@@ -26,6 +26,7 @@ ABS_RANGE_MULT = 0.7
 NEAR_PCT = 0.0015
 LOOKBACK = 100
 HORIZON = 200  # cuantas velas hacia adelante espera a que toque TP o SL
+MIN_TP_PCT = 0.006  # piso minimo de distancia al TP, como % del precio (0.6%)
 
 def fetch_bars(symbol, interval, outputsize):
     url = ("https://api.twelvedata.com/time_series?symbol=" + urllib.parse.quote(symbol) +
@@ -127,9 +128,15 @@ def evaluate_at(bars, i):
     if side == "buy":
         sl = flush_low - buf
         tp = poc if poc > price else vah
+        min_tp = price * (1 + MIN_TP_PCT)
+        if tp < min_tp:
+            tp = min_tp
     else:
         sl = flush_high + buf
         tp = poc if poc < price else val
+        min_tp = price * (1 - MIN_TP_PCT)
+        if tp > min_tp:
+            tp = min_tp
     return {"side": side, "conf": conf, "entry": price, "sl": sl, "tp": tp, "idx": i}
 
 def simulate_outcome(bars, signal):
