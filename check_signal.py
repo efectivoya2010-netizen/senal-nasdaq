@@ -15,7 +15,8 @@ VALUE_AREA_PCT = 0.70
 ABS_VOL_MULT = 1.5
 ABS_RANGE_MULT = 0.7
 NEAR_PCT = 0.0015
-MIN_CONFLUENCE = 3
+MIN_CONFLUENCE = 2
+MIN_TP_PCT_BY_SYMBOL = {"QQQ": 0.0, "BTC/USD": 0.006}  # piso minimo de TP como % del precio, por instrumento
 STATE_FILE = "state.json"
 
 def fetch_bars(symbol, interval, outputsize):
@@ -31,7 +32,8 @@ def fetch_bars(symbol, interval, outputsize):
         bars.append({
             "o": float(v["open"]), "h": float(v["high"]),
             "l": float(v["low"]), "c": float(v["close"]),
-            "v": float(v.get("volume") or 0)
+            "v": float(v.get("volume") or 0),
+            "t": v.get("datetime", "")
         })
     return bars
 
@@ -69,7 +71,7 @@ def volume_profile(bars):
     val = lo + down * step
     return poc, vah, val
 
-def evaluate(bars):
+def evaluate(bars, symbol):
     n = len(bars)
     poc, vah, val = volume_profile(bars)
 
@@ -109,15 +111,24 @@ def evaluate(bars):
     valid = conf >= MIN_CONFLUENCE
 
     result = {"side": side, "conf": conf, "valid": valid, "price": price,
-              "val": val, "vah": vah, "poc": poc}
+              "val": val, "vah": vah, "poc": poc, "t": last_bar.get("t", "")}
     if valid:
         buf = price * 0.001
+        min_tp_pct = MIN_TP_PCT_BY_SYMBOL.get(symbol, 0.0)
         if side == "buy":
             result["sl"] = flush_low - buf
             result["tp"] = poc if poc > price else vah
+            if min_tp_pct > 0:
+                min_tp = price * (1 + min_tp_pct)
+                if result["tp"] < min_tp:
+                    result["tp"] = min_tp
         else:
             result["sl"] = flush_high + buf
             result["tp"] = poc if poc < price else val
+            if min_tp_pct > 0:
+                min_tp = price * (1 - min_tp_pct)
+                if result["tp"] > min_tp:
+                    result["tp"] = min_tp
     return result
 
 def send_push(title, message):
@@ -143,7 +154,7 @@ def main():
     for symbol, interval, outputsize in INSTRUMENTS:
         try:
             bars = fetch_bars(symbol, interval, outputsize)
-            r = evaluate(bars)
+            r = evaluate(bars, symbol)
         except Exception as e:
             print(f"{symbol}: error -> {e}")
             continue
@@ -154,7 +165,9 @@ def main():
 
         if r["valid"] and r["side"] != last_side:
             label = "COMPRA" if r["side"] == "buy" else "VENTA"
+            hora = r["t"][11:16] if r.get("t") else "?"
             msg = (f"{symbol} @ {r['price']:.2f}\n"
+                   f"Vela: {hora}\n"
                    f"Confluencia {r['conf']}/4\n"
                    f"SL {r['sl']:.2f} | TP {r['tp']:.2f}\n"
                    f"VAL {r['val']:.2f} | POC {r['poc']:.2f} | VAH {r['vah']:.2f}")
