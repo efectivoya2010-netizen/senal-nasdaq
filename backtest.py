@@ -26,7 +26,7 @@ ABS_RANGE_MULT = 0.7
 NEAR_PCT = 0.0015
 LOOKBACK = 100
 HORIZON = 200  # cuantas velas hacia adelante espera a que toque TP o SL
-MIN_TP_PCT = 0.006  # piso minimo de distancia al TP, como % del precio (0.6%)
+MIN_TP_PCT_BY_SYMBOL = {"QQQ": 0.0, "BTC/USD": 0.006}  # piso minimo de TP como % del precio, por instrumento
 
 def fetch_bars(symbol, interval, outputsize):
     url = ("https://api.twelvedata.com/time_series?symbol=" + urllib.parse.quote(symbol) +
@@ -41,7 +41,8 @@ def fetch_bars(symbol, interval, outputsize):
         bars.append({
             "o": float(v["open"]), "h": float(v["high"]),
             "l": float(v["low"]), "c": float(v["close"]),
-            "v": float(v.get("volume") or 0)
+            "v": float(v.get("volume") or 0),
+            "t": v.get("datetime", "")
         })
     return bars
 
@@ -80,7 +81,7 @@ def volume_profile(bars, start, count):
     val = lo + down * step
     return poc, vah, val
 
-def evaluate_at(bars, i):
+def evaluate_at(bars, i, min_tp_pct):
     """Replica la logica de check_signal.py pero usando solo datos hasta la vela i (sin mirar el futuro)."""
     start = max(0, i - LOOKBACK + 1)
     window = bars[start:i+1]
@@ -128,13 +129,13 @@ def evaluate_at(bars, i):
     if side == "buy":
         sl = flush_low - buf
         tp = poc if poc > price else vah
-        min_tp = price * (1 + MIN_TP_PCT)
+        min_tp = price * (1 + min_tp_pct)
         if tp < min_tp:
             tp = min_tp
     else:
         sl = flush_high + buf
         tp = poc if poc < price else val
-        min_tp = price * (1 - MIN_TP_PCT)
+        min_tp = price * (1 - min_tp_pct)
         if tp > min_tp:
             tp = min_tp
     return {"side": side, "conf": conf, "entry": price, "sl": sl, "tp": tp, "idx": i}
@@ -166,13 +167,15 @@ def main():
             report_lines.append(f"Error trayendo datos: {e}\n")
             continue
 
-        stats = {c: {"win":0, "loss":0, "sum_win_pct":0.0, "sum_loss_pct":0.0} for c in [1,2,3,4]}
+        min_tp_pct = MIN_TP_PCT_BY_SYMBOL.get(symbol, 0.0)
+        stats = {c: {"win":0, "loss":0, "sum_win_pct":0.0, "sum_loss_pct":0.0, "count":0} for c in [1,2,3,4]}
         total_signals = 0
         i = LOOKBACK
         while i < len(bars) - 1:
-            sig = evaluate_at(bars, i)
+            sig = evaluate_at(bars, i, min_tp_pct)
             if sig:
                 total_signals += 1
+                stats[sig["conf"]]["count"] += 1
                 outcome, pct = simulate_outcome(bars, sig)
                 if outcome in ("win","loss"):
                     stats[sig["conf"]][outcome] += 1
@@ -180,9 +183,14 @@ def main():
                     else: stats[sig["conf"]]["sum_loss_pct"] += pct
             i += 1
 
-        report_lines.append(f"Velas analizadas: {len(bars)} | Señales encontradas: {total_signals}\n")
-        report_lines.append("| Confluencia | Ganadas | Perdidas | % Acierto | Ganancia media | Pérdida media | Expectativa* | Factor de ganancia** |")
-        report_lines.append("|---|---|---|---|---|---|---|---|")
+        # calcular cuantos dias abarcan los datos, para saber señales/dia
+        fechas = [b["t"][:10] for b in bars if b["t"]]
+        dias_distintos = len(set(fechas)) if fechas else 1
+        dias_distintos = max(dias_distintos, 1)
+
+        report_lines.append(f"Velas analizadas: {len(bars)} | Señales encontradas: {total_signals} | Período: ~{dias_distintos} días\n")
+        report_lines.append("| Confluencia | Señales/día | Ganadas | Perdidas | % Acierto | Ganancia media | Pérdida media | Expectativa* | Factor de ganancia** |")
+        report_lines.append("|---|---|---|---|---|---|---|---|---|")
         for conf in [1,2,3,4]:
             s = stats[conf]
             w, l = s["win"], s["loss"]
@@ -195,7 +203,8 @@ def main():
             expectancy = (win_rate*avg_win) - (loss_rate*avg_loss)
             profit_factor = (s["sum_win_pct"]/s["sum_loss_pct"]) if s["sum_loss_pct"] > 0 else (float('inf') if s["sum_win_pct"]>0 else 0)
             pf_str = "∞" if profit_factor == float('inf') else f"{profit_factor:.2f}"
-            report_lines.append(f"| {conf}/4 | {w} | {l} | {pct:.1f}% ({total} casos) | +{avg_win:.2f}% | -{avg_loss:.2f}% | {expectancy:+.3f}% | {pf_str} |")
+            señales_dia = s["count"] / dias_distintos
+            report_lines.append(f"| {conf}/4 | {señales_dia:.2f} | {w} | {l} | {pct:.1f}% ({total} casos) | +{avg_win:.2f}% | -{avg_loss:.2f}% | {expectancy:+.3f}% | {pf_str} |")
         report_lines.append("\n*Expectativa: cuánto se espera ganar o perder en promedio por operación, combinando el % de acierto con el tamaño de cada ganancia/pérdida. Positivo = rentable en promedio, negativo = pierde plata en promedio aunque acierte muchas veces.")
         report_lines.append("\n**Factor de ganancia: total ganado / total perdido. Por encima de 1 = rentable, por debajo de 1 = no, sin importar el % de acierto.\n")
 
