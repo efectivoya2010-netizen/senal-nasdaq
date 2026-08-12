@@ -159,6 +159,40 @@ def simulate_outcome(bars, signal):
             if b["l"] <= tp: return "win", win_pct
     return "sin_definir", 0  # no toco ninguno de los dos dentro del horizonte
 
+BE_TRIGGER_FRAC = 0.5  # mover a break-even cuando el precio recorrio el 50% del camino a TP
+
+def simulate_outcome_be(bars, signal):
+    """Igual que simulate_outcome, pero mueve el SL a break-even (precio de entrada)
+    apenas el precio recorrio BE_TRIGGER_FRAC del camino hacia el TP.
+    Nota: asume que dentro de una misma vela el precio primero toca el nivel de
+    break-even antes que el stop, ya que no sabemos el orden exacto intra-vela con
+    datos de velas (solo O/H/L/C) -- es una simplificacion optimista a tener en cuenta."""
+    side, sl, tp, entry = signal["side"], signal["sl"], signal["tp"], signal["entry"]
+    start = signal["idx"] + 1
+    end = min(len(bars), start + HORIZON)
+    win_pct = abs(tp - entry) / entry * 100
+    loss_pct = abs(entry - sl) / entry * 100
+    be_trigger = entry + BE_TRIGGER_FRAC * (tp - entry) if side == "buy" else entry - BE_TRIGGER_FRAC * (entry - tp)
+    current_stop = sl
+    be_active = False
+    for k in range(start, end):
+        b = bars[k]
+        if side == "buy":
+            if not be_active and b["h"] >= be_trigger:
+                be_active = True
+                current_stop = entry
+            if b["l"] <= current_stop:
+                return ("be", 0.0) if be_active else ("loss", loss_pct)
+            if b["h"] >= tp: return "win", win_pct
+        else:
+            if not be_active and b["l"] <= be_trigger:
+                be_active = True
+                current_stop = entry
+            if b["h"] >= current_stop:
+                return ("be", 0.0) if be_active else ("loss", loss_pct)
+            if b["l"] <= tp: return "win", win_pct
+    return "sin_definir", 0
+
 def main():
     report_lines = ["# Backtest — resultados por nivel de confluencia\n"]
     for symbol, interval in INSTRUMENTS:
@@ -171,6 +205,7 @@ def main():
 
         min_tp_pct = MIN_TP_PCT_BY_SYMBOL.get(symbol, 0.0)
         stats = {c: {"win":0, "loss":0, "sum_win_pct":0.0, "sum_loss_pct":0.0, "count":0} for c in [1,2,3,4]}
+        stats_be = {c: {"win":0, "loss":0, "be":0, "sum_win_pct":0.0, "sum_loss_pct":0.0} for c in [1,2,3,4]}
         total_signals = 0
         i = LOOKBACK
         while i < len(bars) - 1:
@@ -183,6 +218,11 @@ def main():
                     stats[sig["conf"]][outcome] += 1
                     if outcome == "win": stats[sig["conf"]]["sum_win_pct"] += pct
                     else: stats[sig["conf"]]["sum_loss_pct"] += pct
+                outcome_be, pct_be = simulate_outcome_be(bars, sig)
+                if outcome_be in ("win","loss","be"):
+                    stats_be[sig["conf"]][outcome_be] += 1
+                    if outcome_be == "win": stats_be[sig["conf"]]["sum_win_pct"] += pct_be
+                    elif outcome_be == "loss": stats_be[sig["conf"]]["sum_loss_pct"] += pct_be
             i += 1
 
         # calcular cuantos dias abarcan los datos, para saber señales/dia
@@ -209,6 +249,23 @@ def main():
             report_lines.append(f"| {conf}/4 | {señales_dia:.2f} | {w} | {l} | {pct:.1f}% ({total} casos) | +{avg_win:.2f}% | -{avg_loss:.2f}% | {expectancy:+.3f}% | {pf_str} |")
         report_lines.append("\n*Expectativa: cuánto se espera ganar o perder en promedio por operación, combinando el % de acierto con el tamaño de cada ganancia/pérdida. Positivo = rentable en promedio, negativo = pierde plata en promedio aunque acierte muchas veces.")
         report_lines.append("\n**Factor de ganancia: total ganado / total perdido. Por encima de 1 = rentable, por debajo de 1 = no, sin importar el % de acierto.\n")
+
+        report_lines.append(f"\n### {symbol} — con Break-Even (mover SL a entrada al {int(BE_TRIGGER_FRAC*100)}% del camino al TP)\n")
+        report_lines.append("| Confluencia | Ganadas | Perdidas | Empates (BE) | % Acierto (sin empates) | Expectativa* |")
+        report_lines.append("|---|---|---|---|---|---|")
+        for conf in [1,2,3,4]:
+            s = stats_be[conf]
+            w, l, be = s["win"], s["loss"], s["be"]
+            total_decisivo = w + l
+            pct = (w/total_decisivo*100) if total_decisivo > 0 else 0
+            avg_win = (s["sum_win_pct"]/w) if w > 0 else 0
+            avg_loss = (s["sum_loss_pct"]/l) if l > 0 else 0
+            total_ops = w + l + be
+            win_rate = w/total_ops if total_ops > 0 else 0
+            loss_rate = l/total_ops if total_ops > 0 else 0
+            expectancy = (win_rate*avg_win) - (loss_rate*avg_loss)
+            report_lines.append(f"| {conf}/4 | {w} | {l} | {be} | {pct:.1f}% | {expectancy:+.3f}% |")
+        report_lines.append("\n*Con BE, 'empates' son operaciones que iban ganando, tocaron el 50% del camino al TP, y despues volvieron a entrada sin llegar al TP -- ni ganan ni pierden, cierran en 0. Nota: esta simulacion asume que dentro de una vela el precio toca primero el nivel de break-even antes que el stop original, lo cual es optimista ya que no tenemos el orden exacto de los movimientos dentro de cada vela de 5 minutos.\n")
 
     report = "\n".join(report_lines)
     print(report)
