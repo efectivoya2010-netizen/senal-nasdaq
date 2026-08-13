@@ -24,6 +24,7 @@ VALUE_AREA_PCT = 0.70
 ABS_VOL_MULT = 1.5
 ABS_RANGE_MULT = 0.7
 NEAR_PCT = 0.0015
+MIN_FLUSH_RATIO = 1.0  # descarta señales con SL "pegado" (mecha chica vs rango normal)
 LOOKBACK = 100
 HORIZON = 200  # cuantas velas hacia adelante espera a que toque TP o SL
 MIN_TP_PCT_BY_SYMBOL = {"QQQ": 0.0, "BTC/USD": 0.006}  # piso minimo de TP como % del precio, por instrumento
@@ -143,6 +144,8 @@ def evaluate_at(bars, i, min_tp_pct):
     flush_dist_pct = abs(price - sl) / price * 100
     avg_range_pct = (avg_range / price) * 100
     flush_ratio = flush_dist_pct / avg_range_pct if avg_range_pct > 0 else 0
+    if flush_ratio < MIN_FLUSH_RATIO:
+        return None
     return {"side": side, "conf": conf, "entry": price, "sl": sl, "tp": tp, "idx": i,
             "flush_ratio": flush_ratio}
 
